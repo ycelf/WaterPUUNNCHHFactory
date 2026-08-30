@@ -47,7 +47,7 @@ public class WaterHazard : MonoBehaviour
         {
             return;
         }
-
+        characterController.gameObject.GetComponent<Animator>().SetBool("IsInWater", true);
         playerInWater = characterController;
         if (!IsPlayerProtected() && deathCountdownRoutine == null)
         {
@@ -62,7 +62,7 @@ public class WaterHazard : MonoBehaviour
         {
             return;
         }
-
+        characterController.gameObject.GetComponent<Animator>().SetBool("IsInWater", false);
         StopDeathCountdown();
         playerInWater = null;
     }
