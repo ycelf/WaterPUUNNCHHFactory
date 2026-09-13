@@ -55,6 +55,11 @@ public class WaterHazard : MonoBehaviour
     {
         if (playerInWater == null)
         {
+            TryAcquirePlayer();
+        }
+
+        if (playerInWater == null)
+        {
             return;
         }
 
@@ -89,6 +94,7 @@ public class WaterHazard : MonoBehaviour
 
         if (deathCountdownRoutine == null)
         {
+
             deathCountdownRoutine = StartCoroutine(DeathCountdown(playerInWater));
         }
     }
@@ -116,6 +122,28 @@ public class WaterHazard : MonoBehaviour
         }
 
         // Keep tracking until the lower-body detection point leaves the water volume.
+    }
+
+    private void TryAcquirePlayer()
+    {
+        GameObject playerObject = GameObject.FindGameObjectWithTag(playerTag);
+        if (playerObject == null)
+        {
+            return;
+        }
+
+        CharacterController characterController = playerObject.GetComponent<CharacterController>();
+        WaterPunchWaterSafety swimming = characterController != null
+            ? characterController.GetComponent<WaterPunchWaterSafety>()
+            : null;
+        Vector3 lowerBodyPoint = swimming != null && swimming.LowerBodyDetectionPoint != null
+            ? swimming.LowerBodyDetectionPoint.position
+            : playerObject.transform.position + Vector3.up * fallbackLowerBodyDetectionPointHeight;
+
+        if (characterController != null && waterVolume != null && waterVolume.enabled && waterVolume.bounds.Contains(lowerBodyPoint))
+        {
+            playerInWater = characterController;
+        }
     }
 
     private void UpdateWaterSurface(WaterPunchWaterSafety swimming)
@@ -188,6 +216,14 @@ public class WaterHazard : MonoBehaviour
     private IEnumerator DeathCountdown(CharacterController characterController)
     {
         yield return new WaitForSeconds(deathDelay);
+
+        Animator animator = characterController.GetComponent<Animator>();
+        if (animator != null)
+        {
+            animator.SetBool("IsDrown",true);
+        }
+
+        yield return new WaitForSeconds(1);
 
         deathCountdownRoutine = null;
         WaterPunchWaterSafety swimming = characterController.GetComponent<WaterPunchWaterSafety>();

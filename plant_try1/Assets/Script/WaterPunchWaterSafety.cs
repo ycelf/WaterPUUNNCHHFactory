@@ -139,13 +139,6 @@ public class WaterPunchWaterSafety : MonoBehaviour
 
     private void Update()
     {
-#if ENABLE_INPUT_SYSTEM
-        if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
-        {
-            TrySwim();
-        }
-#endif
-
         if (isChestSubmerged)
         {
             SendMessage("JumpInput", false, SendMessageOptions.DontRequireReceiver);
@@ -154,6 +147,19 @@ public class WaterPunchWaterSafety : MonoBehaviour
         UpdateRipple();
         ApplyPendingSwimMovement();
     }
+
+#if ENABLE_INPUT_SYSTEM
+    /// <summary>
+    /// Receives the Player action map Attack event, which is bound to the left mouse button.
+    /// </summary>
+    public void OnAttack(UnityEngine.InputSystem.InputValue value)
+    {
+        if (value.isPressed)
+        {
+            TrySwim();
+        }
+    }
+#endif
 
     private void ApplyPendingSwimMovement()
     {
@@ -180,6 +186,7 @@ public class WaterPunchWaterSafety : MonoBehaviour
 
     public void SetInWater(bool value)
     {
+        if (value == isInWater)
         {
             return;
         }
