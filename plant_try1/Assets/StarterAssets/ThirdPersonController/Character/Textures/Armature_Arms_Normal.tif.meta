@@ -109,8 +109,7 @@ TextureImporter:
 AssetOrigin:
   serializedVersion: 1
   productId: 196526
-  packageName: Starter Assets - ThirdPerson | Updates in new CharacterController
-    package
-  packageVersion: 1.1.7
+  packageName: 'Starter Assets: Character Controllers | URP'
+  packageVersion: 2.0
   assetPath: Assets/StarterAssets/ThirdPersonController/Character/Textures/Armature_Arms_Normal.tif
-  uploadId: 879174
+  uploadId: 988818

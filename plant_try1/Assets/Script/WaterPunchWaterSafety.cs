@@ -7,23 +7,35 @@ using UnityEngine.InputSystem;
 [RequireComponent(typeof(CharacterController))]
 public class WaterPunchWaterSafety : MonoBehaviour
 {
-    [Header("Water Punch Safety")]
+    [Header("Swimming")]
+    [Min(0)]
+    [SerializeField] private int swimUses = 6;
+
+    [Min(0)]
+    [SerializeField] private int struggleUses = 2;
+
     [Min(0.1f)]
-    [SerializeField] private float safetyDuration = 0.45f;
-
-    [Min(0.5f)]
-    [SerializeField] private float safetyZoneLength = 2.6f;
-
-    [Min(0.25f)]
-    [SerializeField] private float safetyZoneHalfWidth = 1.15f;
-
-    [Min(0.25f)]
-    [SerializeField] private float safetyZoneHalfHeight = 1.25f;
+    [SerializeField] private float swimUpwardVelocity = 5.5f;
 
     [Min(0f)]
-    [SerializeField] private float punchForwardOffset = 0.7f;
+    [SerializeField] private float struggleUpwardVelocity = 1.6f;
 
-    [Header("Punch Feedback")]
+    [Header("Drowning Detection Points")]
+    [SerializeField] private Transform drowningDetectionPoint;
+
+    [Min(0.1f)]
+    [SerializeField] private float drowningDetectionPointHeight = 1f;
+
+    [SerializeField] private Transform headDrowningDetectionPoint;
+
+    [Min(0.1f)]
+    [SerializeField] private float headDrowningDetectionPointHeight = 1.65f;
+
+    [Min(0.05f)]
+    [SerializeField] private float lowerBodyDetectionPointHeight = 0.2f;
+
+    [Min(0f)]
+    [SerializeField] private float surfaceClearance = 0.05f;
     [Min(1)]
     [SerializeField] private int splashParticleCount = 18;
 
@@ -38,11 +50,16 @@ public class WaterPunchWaterSafety : MonoBehaviour
 
     [SerializeField] private Color splashColor = new(0.2f, 0.95f, 0.9f, 0.9f);
 
-    private float safetyExpiresAt;
-    private Vector3 safetyZoneCenter;
-    private Vector3 safetyZoneDirection;
-    private ParticleSystem punchSplash;
-    private ParticleSystem punchMist;
+    private int remainingSwimUses;
+    private int remainingStruggleUses;
+    private float pendingSwimUpwardVelocity;
+    private float waterSurfaceY;
+    private bool hasWaterSurface;
+    private bool isInWater;
+    private bool isChestSubmerged;
+    private CharacterController characterController;
+    private ParticleSystem swimSplash;
+    private ParticleSystem swimMist;
     private LineRenderer rippleRenderer;
     private GameObject rippleObject;
     private Material particleMaterial;
@@ -52,14 +69,72 @@ public class WaterPunchWaterSafety : MonoBehaviour
     private bool rippleActive;
 
     /// <summary>
-    /// Returns true while the latest punch is still protecting the player.
+    /// Gets the current number of full-strength swimming opportunities.
     /// </summary>
-    public bool IsSafetyActive => Time.time < safetyExpiresAt;
+    public int RemainingSwimUses => remainingSwimUses;
+
+    /// <summary>
+    /// Gets the current number of weak struggle opportunities.
+    /// </summary>
+    public int RemainingStruggleUses => remainingStruggleUses;
+
+    /// <summary>
+    /// Gets whether this player is currently inside a water hazard.
+    /// </summary>
+    public bool IsInWater => isInWater;
+
+    /// <summary>
+    /// Gets whether the player's chest is submerged. This controls swimming and ordinary jumping.
+    /// </summary>
+    public bool IsChestSubmerged => isChestSubmerged;
+
+    public Transform DrowningDetectionPoint => drowningDetectionPoint;
+
+    /// <summary>
+    /// Gets the head point used to decide whether the player is drowning.
+    /// </summary>
+    public Transform HeadDrowningDetectionPoint => headDrowningDetectionPoint;
+
+    /// <summary>
+    /// Gets the lower-body point used to keep the player in the water until the legs leave it.
+    /// </summary>
+    public Transform LowerBodyDetectionPoint { get; private set; }
+
+    /// <summary>
+    /// Sets the current world-space water surface height.
+    /// </summary>
+    public void SetWaterSurfaceHeight(float surfaceY)
+    {
+        waterSurfaceY = surfaceY;
+        hasWaterSurface = true;
+    }
+
+    /// <summary>
+    /// Prevents upward swimming movement from carrying the chest above the water surface.
+    /// </summary>
+    public float ConstrainUpwardVelocity(float verticalVelocity, float deltaTime)
+    {
+        if (!isInWater || !hasWaterSurface || verticalVelocity <= 0f || deltaTime <= 0f || drowningDetectionPoint == null)
+        {
+            return verticalVelocity;
+        }
+
+        float chestOffset = drowningDetectionPoint.position.y - transform.position.y;
+        float maximumRootY = waterSurfaceY - chestOffset - surfaceClearance;
+        float maximumDelta = maximumRootY - transform.position.y;
+        if (maximumDelta <= 0f)
+        {
+            return 0f;
+        }
+
+        return Mathf.Min(verticalVelocity, maximumDelta / deltaTime);
+    }
 
     private void Awake()
     {
-        safetyZoneDirection = transform.forward;
-        CreatePunchFeedback();
+        characterController = GetComponent<CharacterController>();
+        EnsureDrowningDetectionPoint();
+        CreateSwimmingFeedback();
     }
 
     private void Update()
@@ -67,73 +142,169 @@ public class WaterPunchWaterSafety : MonoBehaviour
 #if ENABLE_INPUT_SYSTEM
         if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
         {
-            PerformPunch();
+            TrySwim();
         }
 #endif
 
+        if (isChestSubmerged)
+        {
+            SendMessage("JumpInput", false, SendMessageOptions.DontRequireReceiver);
+        }
+
         UpdateRipple();
+        ApplyPendingSwimMovement();
+    }
+
+    private void ApplyPendingSwimMovement()
+    {
+        if (characterController == null || pendingSwimUpwardVelocity <= 0f || !isInWater)
+        {
+            return;
+        }
+
+        float movement = pendingSwimUpwardVelocity * Time.deltaTime;
+        if (hasWaterSurface && drowningDetectionPoint != null)
+        {
+            float chestOffset = drowningDetectionPoint.position.y - transform.position.y;
+            float maximumRootY = waterSurfaceY - chestOffset - surfaceClearance;
+            movement = Mathf.Min(movement, Mathf.Max(0f, maximumRootY - transform.position.y));
+        }
+
+        if (movement > 0f)
+        {
+            characterController.Move(Vector3.up * movement);
+        }
+
+        pendingSwimUpwardVelocity = 0f;
+    }
+
+    public void SetInWater(bool value)
+    {
+        {
+            return;
+        }
+
+        isInWater = value;
+        pendingSwimUpwardVelocity = 0f;
+
+        if (value)
+        {
+            ResetSwimUses();
+        }
     }
 
     /// <summary>
-    /// Checks whether a world position is inside the latest temporary water-safe zone.
+    /// Updates whether the player's chest is submerged.
     /// </summary>
-    public bool IsPositionInSafeZone(Vector3 worldPosition)
+    public void SetChestSubmerged(bool value)
     {
-        if (!IsSafetyActive)
-        {
-            return false;
-        }
-
-        Vector3 offset = worldPosition - safetyZoneCenter;
-        if (Mathf.Abs(offset.y) > safetyZoneHalfHeight)
-        {
-            return false;
-        }
-
-        float forwardDistance = Vector3.Dot(offset, safetyZoneDirection);
-        if (forwardDistance < -0.85f || forwardDistance > safetyZoneLength)
-        {
-            return false;
-        }
-
-        Vector3 sideDirection = Vector3.Cross(Vector3.up, safetyZoneDirection).normalized;
-        float sideDistance = Vector3.Dot(offset, sideDirection);
-        return Mathf.Abs(sideDistance) <= safetyZoneHalfWidth;
+        isChestSubmerged = value;
     }
 
-    private void PerformPunch()
+    public void ResetSwimUses()
     {
-        safetyZoneDirection = transform.forward;
-        if (safetyZoneDirection.sqrMagnitude < 0.001f)
-        {
-            safetyZoneDirection = Vector3.forward;
-        }
-
-        safetyZoneDirection.y = 0f;
-        safetyZoneDirection.Normalize();
-        safetyZoneCenter = transform.position + Vector3.up * 0.9f + safetyZoneDirection * punchForwardOffset;
-        safetyExpiresAt = Time.time + safetyDuration;
-
-        Vector3 punchOrigin = transform.position + Vector3.up * 0.9f + safetyZoneDirection * punchForwardOffset;
-        PlayPunchParticles(punchSplash, punchOrigin, 24f, splashParticleCount);
-        PlayPunchParticles(punchMist, punchOrigin + safetyZoneDirection * 0.2f, 48f, Mathf.Max(8, splashParticleCount / 2));
-        StartRipple(punchOrigin + safetyZoneDirection * 0.35f);
+        remainingSwimUses = Mathf.Max(0, swimUses);
+        remainingStruggleUses = Mathf.Max(0, struggleUses);
     }
 
-    private void CreatePunchFeedback()
+    /// <summary>
+    /// Consumes one swimming or struggle opportunity and queues upward movement.
+    /// </summary>
+    public bool TrySwim()
     {
-        particleMaterial = CreateTransparentMaterial("Water Punch Particle", "Universal Render Pipeline/Particles/Unlit", splashColor);
-        punchSplash = CreateParticleSystem("Water Punch Splash", particleMaterial, 0.32f, 0.08f, 2.6f, 24f, 18f);
-        punchMist = CreateParticleSystem("Water Punch Mist", particleMaterial, 0.48f, 0.14f, 1.5f, 48f, 50f);
+        if (!isInWater)
+        {
+            return false;
+        }
 
-        rippleObject = new GameObject("Water Punch Ripple");
+        float upwardVelocity;
+        if (remainingSwimUses > 0)
+        {
+            remainingSwimUses--;
+            upwardVelocity = swimUpwardVelocity;
+        }
+        else if (remainingStruggleUses > 0)
+        {
+            remainingStruggleUses--;
+            upwardVelocity = struggleUpwardVelocity;
+        }
+        else
+        {
+            return false;
+        }
+
+        pendingSwimUpwardVelocity = Mathf.Max(pendingSwimUpwardVelocity, upwardVelocity);
+        PlaySwimmingFeedback(upwardVelocity > struggleUpwardVelocity);
+        return true;
+    }
+
+    /// <summary>
+    /// Supplies the queued upward velocity to the character controller once.
+    /// </summary>
+    public bool ConsumeSwimUpwardVelocity(out float upwardVelocity)
+    {
+        upwardVelocity = pendingSwimUpwardVelocity;
+        pendingSwimUpwardVelocity = 0f;
+        return upwardVelocity > 0f;
+    }
+
+    private void EnsureDrowningDetectionPoint()
+    {
+        if (drowningDetectionPoint == null)
+        {
+            GameObject pointObject = new("Drowning Detection Point");
+            pointObject.transform.SetParent(transform, false);
+            pointObject.transform.localPosition = Vector3.up * drowningDetectionPointHeight;
+            drowningDetectionPoint = pointObject.transform;
+        }
+
+        if (headDrowningDetectionPoint == null)
+        {
+            GameObject headPointObject = new("Head Drowning Detection Point");
+            headPointObject.transform.SetParent(transform, false);
+            headPointObject.transform.localPosition = Vector3.up * headDrowningDetectionPointHeight;
+            headDrowningDetectionPoint = headPointObject.transform;
+        }
+
+        if (LowerBodyDetectionPoint != null)
+        {
+            return;
+        }
+
+        GameObject lowerPointObject = new("Lower Body Detection Point");
+        lowerPointObject.transform.SetParent(transform, false);
+        lowerPointObject.transform.localPosition = Vector3.up * lowerBodyDetectionPointHeight;
+        LowerBodyDetectionPoint = lowerPointObject.transform;
+    }
+
+    private void PlaySwimmingFeedback(bool isFullStrength)
+    {
+        if (drowningDetectionPoint == null)
+        {
+            return;
+        }
+
+        Vector3 feedbackOrigin = drowningDetectionPoint.position;
+        int particleCount = isFullStrength ? splashParticleCount : Mathf.Max(4, splashParticleCount / 3);
+        PlaySwimmingParticles(swimSplash, feedbackOrigin, 24f, particleCount);
+        PlaySwimmingParticles(swimMist, feedbackOrigin + Vector3.up * 0.12f, 48f, Mathf.Max(3, particleCount / 2));
+        StartRipple(feedbackOrigin);
+    }
+
+    private void CreateSwimmingFeedback()
+    {
+        particleMaterial = CreateTransparentMaterial("Swimming Particle", "Universal Render Pipeline/Particles/Unlit", splashColor);
+        swimSplash = CreateParticleSystem("Swimming Splash", particleMaterial, 0.32f, 0.08f, 2.6f, 24f, 18f);
+        swimMist = CreateParticleSystem("Swimming Mist", particleMaterial, 0.48f, 0.14f, 1.5f, 48f, 50f);
+
+        rippleObject = new GameObject("Swimming Ripple");
         rippleRenderer = rippleObject.AddComponent<LineRenderer>();
         rippleRenderer.loop = true;
         rippleRenderer.useWorldSpace = true;
         rippleRenderer.positionCount = 32;
         rippleRenderer.widthMultiplier = 0.065f;
         rippleRenderer.numCapVertices = 2;
-        rippleRenderer.sharedMaterial = rippleMaterial = CreateTransparentMaterial("Water Punch Ripple", "Universal Render Pipeline/Unlit", new Color(0.25f, 1f, 0.92f, 0.85f));
+        rippleRenderer.sharedMaterial = rippleMaterial = CreateTransparentMaterial("Swimming Ripple", "Universal Render Pipeline/Unlit", new Color(0.25f, 1f, 0.92f, 0.85f));
         rippleRenderer.enabled = false;
     }
 
@@ -187,7 +358,7 @@ public class WaterPunchWaterSafety : MonoBehaviour
         return particleSystem;
     }
 
-    private void PlayPunchParticles(ParticleSystem particleSystem, Vector3 worldPosition, float coneAngle, int count)
+    private void PlaySwimmingParticles(ParticleSystem particleSystem, Vector3 worldPosition, float coneAngle, int count)
     {
         if (particleSystem == null)
         {
@@ -195,7 +366,7 @@ public class WaterPunchWaterSafety : MonoBehaviour
         }
 
         particleSystem.transform.position = worldPosition;
-        particleSystem.transform.rotation = Quaternion.FromToRotation(Vector3.up, safetyZoneDirection);
+        particleSystem.transform.rotation = Quaternion.FromToRotation(Vector3.up, Vector3.up);
         particleSystem.gameObject.SetActive(true);
         particleSystem.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
         particleSystem.Emit(count);
@@ -282,35 +453,5 @@ public class WaterPunchWaterSafety : MonoBehaviour
         }
 
         return material;
-    }
-
-    private void OnDrawGizmosSelected()
-    {
-        Vector3 direction = safetyZoneDirection.sqrMagnitude > 0.001f ? safetyZoneDirection : transform.forward;
-        direction.y = 0f;
-        direction.Normalize();
-        Vector3 center = transform.position + Vector3.up * 0.9f + direction * (punchForwardOffset + safetyZoneLength * 0.5f);
-        Gizmos.color = new Color(0.1f, 1f, 0.9f, 0.35f);
-        Gizmos.matrix = Matrix4x4.TRS(center, Quaternion.LookRotation(direction), Vector3.one);
-        Gizmos.DrawWireCube(new Vector3(0f, 0f, 0f), new Vector3(safetyZoneHalfWidth * 2f, safetyZoneHalfHeight * 2f, safetyZoneLength));
-        Gizmos.matrix = Matrix4x4.identity;
-    }
-
-    private void OnDestroy()
-    {
-        if (rippleObject != null)
-        {
-            Destroy(rippleObject);
-        }
-
-        if (particleMaterial != null)
-        {
-            Destroy(particleMaterial);
-        }
-
-        if (rippleMaterial != null)
-        {
-            Destroy(rippleMaterial);
-        }
     }
 }
