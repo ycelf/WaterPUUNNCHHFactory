@@ -1,11 +1,10 @@
-using System.Collections.Generic;
 using UnityEngine;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
 
 [RequireComponent(typeof(CharacterController))]
-public class WaterPunchWaterSafety : MonoBehaviour
+public class WaterPunchWaterSafety : MonoBehaviour, StarterAssets.IWaterMovementSource
 {
     [Header("Swimming")]
     [Min(0)]
@@ -19,6 +18,13 @@ public class WaterPunchWaterSafety : MonoBehaviour
 
     [Min(0f)]
     [SerializeField] private float struggleUpwardVelocity = 1.6f;
+
+    [Tooltip("水中向下的加速度，必须小于 0。绝对值越小，一次划水上浮得越久。")]
+    [SerializeField] private float swimmingGravity = -4f;
+
+    [Min(0.1f)]
+    [Tooltip("水中最大下沉速度，避免陆地落水时的高速下落抵消划水。")]
+    [SerializeField] private float maximumSinkSpeed = 3f;
 
     [Header("Drowning Detection Points")]
     [SerializeField] private Transform drowningDetectionPoint;
@@ -57,7 +63,7 @@ public class WaterPunchWaterSafety : MonoBehaviour
     private bool hasWaterSurface;
     private bool isInWater;
     private bool isChestSubmerged;
-    private CharacterController characterController;
+    private bool hasGroundSupport;
     private ParticleSystem swimSplash;
     private ParticleSystem swimMist;
     private LineRenderer rippleRenderer;
@@ -84,9 +90,37 @@ public class WaterPunchWaterSafety : MonoBehaviour
     public bool IsInWater => isInWater;
 
     /// <summary>
-    /// Gets whether the player's chest is submerged. This controls swimming and ordinary jumping.
+    /// Gets whether the player's chest is submerged, independently of the chosen movement posture.
     /// </summary>
     public bool IsChestSubmerged => isChestSubmerged;
+
+    // 站立头部高度不受当前游泳动画影响，用它判断浅水里能否安全站起。
+    private Vector3 StandingHeadPosition => transform.position + Vector3.up * headDrowningDetectionPointHeight;
+
+    public bool CanStand => hasGroundSupport &&
+        (!isInWater || (hasWaterSurface && StandingHeadPosition.y > waterSurfaceY + surfaceClearance));
+
+    public bool IsSwimming => isInWater && isChestSubmerged && !CanStand;
+
+    public void SetGroundSupport(bool supported)
+    {
+        hasGroundSupport = supported;
+        if (CanStand)
+        {
+            pendingSwimUpwardVelocity = 0f;
+        }
+    }
+
+    public Vector3 GetHeadDrowningDetectionPosition()
+    {
+        // 即使站立动画还在过渡，浅水里也按站起来后的头部位置判定溺水。
+        return CanStand || headDrowningDetectionPoint == null
+            ? StandingHeadPosition
+            : headDrowningDetectionPoint.position;
+    }
+
+    public float SwimmingGravity => Mathf.Min(-0.01f, swimmingGravity);
+    public float MaximumSinkSpeed => Mathf.Max(0.1f, maximumSinkSpeed);
 
     public Transform DrowningDetectionPoint => drowningDetectionPoint;
 
@@ -114,7 +148,7 @@ public class WaterPunchWaterSafety : MonoBehaviour
     /// </summary>
     public float ConstrainUpwardVelocity(float verticalVelocity, float deltaTime)
     {
-        if (!isInWater || !hasWaterSurface || verticalVelocity <= 0f || deltaTime <= 0f || drowningDetectionPoint == null)
+        if (!IsSwimming || !hasWaterSurface || verticalVelocity <= 0f || deltaTime <= 0f || drowningDetectionPoint == null)
         {
             return verticalVelocity;
         }
@@ -132,20 +166,14 @@ public class WaterPunchWaterSafety : MonoBehaviour
 
     private void Awake()
     {
-        characterController = GetComponent<CharacterController>();
         EnsureDrowningDetectionPoint();
         CreateSwimmingFeedback();
     }
 
     private void Update()
     {
-        if (isChestSubmerged)
-        {
-            SendMessage("JumpInput", false, SendMessageOptions.DontRequireReceiver);
-        }
-
+        // 这里只更新视觉反馈。角色位移统一由 ThirdPersonController 执行。
         UpdateRipple();
-        ApplyPendingSwimMovement();
     }
 
 #if ENABLE_INPUT_SYSTEM
@@ -161,29 +189,6 @@ public class WaterPunchWaterSafety : MonoBehaviour
     }
 #endif
 
-    private void ApplyPendingSwimMovement()
-    {
-        if (characterController == null || pendingSwimUpwardVelocity <= 0f || !isInWater)
-        {
-            return;
-        }
-
-        float movement = pendingSwimUpwardVelocity * Time.deltaTime;
-        if (hasWaterSurface && drowningDetectionPoint != null)
-        {
-            float chestOffset = drowningDetectionPoint.position.y - transform.position.y;
-            float maximumRootY = waterSurfaceY - chestOffset - surfaceClearance;
-            movement = Mathf.Min(movement, Mathf.Max(0f, maximumRootY - transform.position.y));
-        }
-
-        if (movement > 0f)
-        {
-            characterController.Move(Vector3.up * movement);
-        }
-
-        pendingSwimUpwardVelocity = 0f;
-    }
-
     public void SetInWater(bool value)
     {
         if (value == isInWater)
@@ -193,6 +198,12 @@ public class WaterPunchWaterSafety : MonoBehaviour
 
         isInWater = value;
         pendingSwimUpwardVelocity = 0f;
+
+        if (!value)
+        {
+            isChestSubmerged = false;
+            hasWaterSurface = false;
+        }
 
         if (value)
         {
@@ -206,6 +217,10 @@ public class WaterPunchWaterSafety : MonoBehaviour
     public void SetChestSubmerged(bool value)
     {
         isChestSubmerged = value;
+        if (!value)
+        {
+            pendingSwimUpwardVelocity = 0f;
+        }
     }
 
     public void ResetSwimUses()
@@ -219,7 +234,8 @@ public class WaterPunchWaterSafety : MonoBehaviour
     /// </summary>
     public bool TrySwim()
     {
-        if (!isInWater)
+        // 浅水里能够站立时使用普通移动和跳跃，不消耗划水次数。
+        if (!IsSwimming)
         {
             return false;
         }
@@ -240,6 +256,7 @@ public class WaterPunchWaterSafety : MonoBehaviour
             return false;
         }
 
+        // 暂存一次向上速度；角色控制器取走它后，负责后续每一帧的运动。
         pendingSwimUpwardVelocity = Mathf.Max(pendingSwimUpwardVelocity, upwardVelocity);
         PlaySwimmingFeedback(upwardVelocity > struggleUpwardVelocity);
         return true;
@@ -250,6 +267,7 @@ public class WaterPunchWaterSafety : MonoBehaviour
     /// </summary>
     public bool ConsumeSwimUpwardVelocity(out float upwardVelocity)
     {
+        // out 把速度交给调用者；清零的只是待处理请求，不是角色当前速度。
         upwardVelocity = pendingSwimUpwardVelocity;
         pendingSwimUpwardVelocity = 0f;
         return upwardVelocity > 0f;

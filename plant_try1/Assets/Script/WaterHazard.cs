@@ -51,7 +51,7 @@ public class WaterHazard : MonoBehaviour
         }
     }
 
-    private void Update()
+    private void LateUpdate()
     {
         if (playerInWater == null)
         {
@@ -165,8 +165,8 @@ public class WaterHazard : MonoBehaviour
 
     private bool IsHeadSubmerged(WaterPunchWaterSafety swimming)
     {
-        Vector3 detectionPoint = swimming != null && swimming.HeadDrowningDetectionPoint != null
-            ? swimming.HeadDrowningDetectionPoint.position
+        Vector3 detectionPoint = swimming != null
+            ? swimming.GetHeadDrowningDetectionPosition()
             : playerInWater.transform.position + Vector3.up * fallbackHeadDetectionPointHeight;
 
         return IsPointInsideWaterVolume(detectionPoint);
@@ -198,7 +198,11 @@ public class WaterHazard : MonoBehaviour
         Animator animator = characterController.GetComponent<Animator>();
         if (animator != null)
         {
-            animator.SetBool("IsInWater", chestSubmerged);
+            animator.SetBool("IsInWater", swimming != null ? swimming.IsSwimming : chestSubmerged);
+            if (!headSubmerged)
+            {
+                animator.SetBool("IsDrown", false);
+            }
         }
     }
 

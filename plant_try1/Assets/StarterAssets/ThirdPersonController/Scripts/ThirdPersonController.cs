@@ -104,6 +104,8 @@ namespace StarterAssets
         private Animator _animator;
         private CharacterController _controller;
         private StarterAssetsInputs _input;
+        private IWaterMovementSource _waterSafety;
+        private bool _wasSwimming;
         private GameObject _mainCamera;
 
         private const float _threshold = 0.01f;
@@ -139,6 +141,7 @@ namespace StarterAssets
             _hasAnimator = TryGetComponent(out _animator);
             _controller = GetComponent<CharacterController>();
             _input = GetComponent<StarterAssetsInputs>();
+            _waterSafety = GetComponent<IWaterMovementSource>();
 #if ENABLE_INPUT_SYSTEM
             _playerInput = GetComponent<PlayerInput>();
 #else
@@ -156,8 +159,8 @@ namespace StarterAssets
         {
             _hasAnimator = TryGetComponent(out _animator);
 
-            JumpAndGravity();
             GroundedCheck();
+            JumpAndGravity();
             Move();
         }
 
@@ -182,6 +185,9 @@ namespace StarterAssets
                 transform.position.z);
             Grounded = Physics.CheckSphere(spherePosition, GroundedRadius, GroundLayers,
                 QueryTriggerInteraction.Ignore);
+
+            // 先更新脚下支撑，再决定本帧站立还是游泳；上升时不视为站稳。
+            _waterSafety?.SetGroundSupport(Grounded && _verticalVelocity <= 0f);
 
             // update animator if using character
             if (_hasAnimator)
@@ -268,6 +274,11 @@ namespace StarterAssets
             Vector3 targetDirection = Quaternion.Euler(0.0f, _targetRotation, 0.0f) * Vector3.forward;
 
             // move the player
+            if (_waterSafety != null && _waterSafety.IsSwimming)
+            {
+                _verticalVelocity = _waterSafety.ConstrainUpwardVelocity(_verticalVelocity, Time.deltaTime);
+            }
+
             _controller.Move(targetDirection.normalized * (_speed * Time.deltaTime) +
                              new Vector3(0.0f, _verticalVelocity, 0.0f) * Time.deltaTime);
 
@@ -281,6 +292,44 @@ namespace StarterAssets
 
         private void JumpAndGravity()
         {
+            if (_waterSafety != null && _waterSafety.IsSwimming)
+            {
+                // 刚开始游泳时清除陆地下落速度，避免它把划水抵消。
+                if (!_wasSwimming)
+                {
+                    _verticalVelocity = 0f;
+                }
+
+                _wasSwimming = true;
+                _input.jump = false;
+                _jumpTimeoutDelta = JumpTimeout;
+                _fallTimeoutDelta = FallTimeout;
+
+                if (_hasAnimator)
+                {
+                    _animator.SetBool(_animIDJump, false);
+                    _animator.SetBool(_animIDFreeFall, false);
+                }
+
+                if (_waterSafety.ConsumeSwimUpwardVelocity(out float upwardVelocity))
+                {
+                    // 一次划水重设垂直速度；之后逐帧由水中重力降低它。
+                    _verticalVelocity = upwardVelocity;
+                }
+
+                _verticalVelocity = Mathf.Max(
+                    _verticalVelocity + _waterSafety.SwimmingGravity * Time.deltaTime,
+                    -_waterSafety.MaximumSinkSpeed);
+                return;
+            }
+
+            if (_wasSwimming)
+            {
+                // 出水或复活后，不把水中的向上速度带回普通跳跃。
+                _verticalVelocity = 0f;
+                _wasSwimming = false;
+            }
+
             if (Grounded)
             {
                 // reset the fall timeout timer

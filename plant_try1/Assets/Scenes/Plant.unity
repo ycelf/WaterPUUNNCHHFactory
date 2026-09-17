@@ -29438,7 +29438,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 3893294197879345259, guid: 64dce48905ffd9b4293e595fa6941544, type: 3}
       propertyPath: m_LocalPosition.x
-      value: 5
+      value: 25
       objectReference: {fileID: 0}
     - target: {fileID: 3893294197879345259, guid: 64dce48905ffd9b4293e595fa6941544, type: 3}
       propertyPath: m_LocalPosition.y
@@ -69137,7 +69137,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 2070925441746177912, guid: a1a802ecaf6775746bb2a929fb554ad8, type: 3}
       propertyPath: m_LocalPosition.x
-      value: 5.2
+      value: 25.2
       objectReference: {fileID: 0}
     - target: {fileID: 2070925441746177912, guid: a1a802ecaf6775746bb2a929fb554ad8, type: 3}
       propertyPath: m_LocalPosition.y
@@ -69145,7 +69145,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 2070925441746177912, guid: a1a802ecaf6775746bb2a929fb554ad8, type: 3}
       propertyPath: m_LocalPosition.z
-      value: 5.7633524
+      value: 5.799516
       objectReference: {fileID: 0}
     - target: {fileID: 2070925441746177912, guid: a1a802ecaf6775746bb2a929fb554ad8, type: 3}
       propertyPath: m_LocalRotation.w
@@ -77753,8 +77753,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::WaterPunchWaterSafety
   swimUses: 6
   struggleUses: 2
-  swimUpwardVelocity: 5.5
+  swimUpwardVelocity: 3.5
   struggleUpwardVelocity: 1.6
+  swimmingGravity: -4
+  maximumSinkSpeed: 3
   drowningDetectionPoint: {fileID: 0}
   drowningDetectionPointHeight: 1
   headDrowningDetectionPoint: {fileID: 0}
@@ -99467,6 +99469,8 @@ MonoBehaviour:
   struggleUses: 2
   swimUpwardVelocity: 5.5
   struggleUpwardVelocity: 1.6
+  swimmingGravity: -4
+  maximumSinkSpeed: 3
   drowningDetectionPoint: {fileID: 0}
   drowningDetectionPointHeight: 1
   headDrowningDetectionPoint: {fileID: 0}
@@ -215671,7 +215675,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 8944336655422409503, guid: f6d148d888ffbf54b9afe9936dfaec1f, type: 3}
       propertyPath: m_LocalPosition.x
-      value: 5.2
+      value: 25.2
       objectReference: {fileID: 0}
     - target: {fileID: 8944336655422409503, guid: f6d148d888ffbf54b9afe9936dfaec1f, type: 3}
       propertyPath: m_LocalPosition.y
@@ -215679,7 +215683,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 8944336655422409503, guid: f6d148d888ffbf54b9afe9936dfaec1f, type: 3}
       propertyPath: m_LocalPosition.z
-      value: 5.7633524
+      value: 5.799516
       objectReference: {fileID: 0}
     - target: {fileID: 8944336655422409503, guid: f6d148d888ffbf54b9afe9936dfaec1f, type: 3}
       propertyPath: m_LocalRotation.w
