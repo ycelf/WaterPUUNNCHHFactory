@@ -31,6 +31,11 @@ public class WaterControlDevice : MonoBehaviour
     [SerializeField]
     private bool oneShot = true;
 
+    [Header("Interaction Prompt")]
+    [SerializeField]
+    public WorldInteractionPrompt interactionPrompt;
+
+  
     private bool playerInsede;
 
     private bool hasBeenUsed;
@@ -93,6 +98,11 @@ public class WaterControlDevice : MonoBehaviour
         }
 
         hasBeenUsed = true;
+
+        if (oneShot)
+        {
+            interactionPrompt?.Hide();
+        }
     }
 
     //====
@@ -121,6 +131,11 @@ public class WaterControlDevice : MonoBehaviour
     public void ResetDevice()
 {
     hasBeenUsed = false;
+
+        if (playerInsede)
+        {
+            interactionPrompt?.Show();
+        }
 
     if (delayRoutine != null)
     {
@@ -190,6 +205,12 @@ public class WaterControlDevice : MonoBehaviour
 
         playerInsede = true;
 
+        if(!oneShot || !hasBeenUsed)
+        {
+            interactionPrompt?.Show();
+
+        }
+
         Debug.Log($"可以互动：按{InteraactKey}");
 
     }
@@ -207,6 +228,7 @@ public class WaterControlDevice : MonoBehaviour
             return;
         }
         playerInsede = false;
+        interactionPrompt?.Hide();
     }
 
 

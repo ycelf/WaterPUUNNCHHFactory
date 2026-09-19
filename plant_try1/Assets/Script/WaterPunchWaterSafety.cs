@@ -56,6 +56,13 @@ public class WaterPunchWaterSafety : MonoBehaviour, StarterAssets.IWaterMovement
 
     [SerializeField] private Color splashColor = new(0.2f, 0.95f, 0.9f, 0.9f);
 
+    [Header("Shallow Water Jump")]
+
+    [Min(0f)]
+    [SerializeField] private float shallowWaterJumpGraceSeconds = 0.5f;
+
+    private float keepStandingUntil;
+
     private int remainingSwimUses;
     private int remainingStruggleUses;
     private float pendingSwimUpwardVelocity;
@@ -104,7 +111,10 @@ public class WaterPunchWaterSafety : MonoBehaviour, StarterAssets.IWaterMovement
 
     public void SetGroundSupport(bool supported)
     {
-        hasGroundSupport = supported;
+        bool hasShallowJumpGrace = Time.time < keepStandingUntil && isInWater && isChestSubmerged;
+
+        hasGroundSupport = supported || hasShallowJumpGrace;
+
         if (CanStand)
         {
             pendingSwimUpwardVelocity = 0f;
@@ -189,6 +199,23 @@ public class WaterPunchWaterSafety : MonoBehaviour, StarterAssets.IWaterMovement
     }
 #endif
 
+#if ENABLE_INPUT_SYSTEM
+    public void OnJump(InputValue value)
+    {
+        if (!value.isPressed)
+        {
+            return;
+        }
+        //only in water and can stand, start shallow water protection
+
+        if (isInWater && CanStand)
+        {
+            keepStandingUntil = Time.time + shallowWaterJumpGraceSeconds;
+        }
+
+    }
+#endif
+
     public void SetInWater(bool value)
     {
         if (value == isInWater)
@@ -217,9 +244,12 @@ public class WaterPunchWaterSafety : MonoBehaviour, StarterAssets.IWaterMovement
     public void SetChestSubmerged(bool value)
     {
         isChestSubmerged = value;
+
         if (!value)
         {
             pendingSwimUpwardVelocity = 0f;
+            keepStandingUntil = 0f;
+
         }
     }
 
