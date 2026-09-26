@@ -42,6 +42,10 @@ public class WaterLevelStep
     [Tooltip("保持该水位的时间")]
     public float holdSeconds = 3f;
 
+    [Min(0f)]
+    [Tooltip("从当前水位到本阶段水位需要多久，0表示瞬间切换")]
+    public float transitionSeconds = 1.5f;
+
 }
 
 [Serializable]
@@ -120,6 +124,20 @@ public class WaterRoomController : MonoBehaviour
     [Tooltip("每次涨水后停留多久，再进入下一轮等待")]
     [SerializeField] private float holdAfterPulse = 2f;
 
+    [Header("水位补间")]
+
+    [Tooltip("Preset 勾选为缓入缓出，取消为匀速")]
+    [SerializeField] private bool smoothPresetTransitions = true;
+
+    [Tooltip("横轴是时间进度，纵轴是水位变化进度")]
+    [SerializeField]
+    private AnimationCurve waterTransitionCurve =
+    AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
+
+    [Min(0f)]
+    [Tooltip("累计模式每次涨水耗时，0表示瞬间上涨")]
+    [SerializeField] private float accumulationTransitionSeconds = 1.5f;
+
     [Header("进入与离开")]
     [SerializeField] private bool startWhenPlayerEnters = true;//检测玩家有没有进入
     [SerializeField] private WaterExitBehaviour exitBehaviour = WaterExitBehaviour.StopAndReset;//选waterexitvehaviour里的stopandreset状态
@@ -132,6 +150,15 @@ public class WaterRoomController : MonoBehaviour
 
     [Header("上下层水量的联动")]
     [SerializeField] private List<WaterTransferLink> lowerRoomLinks = new();
+
+    [Header("收到上层来水")]
+
+    [Min(0f)]
+    [Tooltip("收到上层传水后，用多少秒上涨到目标水位；0 表示瞬间")]
+    [SerializeField] private float receivedWaterTransitionSeconds = 1.5f;
+
+    [Tooltip("勾选为缓入缓出，取消为匀速上涨")]
+    [SerializeField] private bool smoothReceivedWater = true;
 
     [Header("事件：可以链接粒子、声音、警报、闸门动画etc")]
     public UnityEvent onCycleStarted;
@@ -160,6 +187,31 @@ public class WaterRoomController : MonoBehaviour
     private bool presetStepChangedExternally;
 
     private const float HeightEpsilon = 0.001f;
+
+    public float TargetHeight =>
+        tweenActive ? tweenTarget : CurrentHeight;
+
+    public bool IsTransitioning => tweenActive;
+
+    private bool tweenActive;
+    private float tweenStart;
+    private float tweenTarget;
+    private float tweenDuration;
+    private float tweenElapsed;
+    private bool tweenSmooth;
+    private bool tweenTransfersWater;
+    private int tweenRevision;
+    [Header("水位更新频率")]
+
+    [Tooltip("勾选后按指定时间间隔刷新实际水位；取消则每帧刷新")]
+    [SerializeField] private bool useFixedWaterUpdateInterval = false;
+
+    [Min(0.01f)]
+    [Tooltip("单位为秒。0.05 约为每秒刷新 20 次")]
+    [SerializeField] private float waterUpdateInterval = 0.05f;
+
+    // 运行时计时器，不需要在 Inspector 中设置。
+    private float waterUpdateClock;
 
     private void Awake()
     {
@@ -238,6 +290,7 @@ public class WaterRoomController : MonoBehaviour
 
     public void StopAndResetNow()
     {
+        EndTransition(false);
         //先记录停止之前是不是处于活动状态
         bool wasActive = isRunning || cycleRoutine != null;
         //isrunning程序还在运行，或者水循环还在进行中，两者二选一只要一个成立就was active
@@ -363,6 +416,7 @@ public void StepBackOneStage()
 
     public void SolveRoom()
     {
+        EndTransition(false);
         StopAllCoroutines();
 
         cycleRoutine = null;
@@ -476,6 +530,8 @@ public void StepBackOneStage()
 
     private IEnumerator RunCycle()//总调度，ienumerator说明可以分很多帧慢慢执行，用yield return是，可以暂停在这里，之后继续。yield break是整体到此结束
     {
+        yield return null;
+
         if(startDelay > 0f)
         {
             yield return WaitPausable(startDelay);//执行waitPausable，等到它彻底执行完，再往下继续
@@ -509,128 +565,259 @@ public void StepBackOneStage()
 //break        = 跳出循环或 switch
     private IEnumerator RunPresetSequence()//按照预设表循环水位
     {
-        if(presetSteps == null || presetSteps.Count == 0)//依次执行每个水位阶段
+        if(presetSteps == null || presetSteps.Count == 0 || !presetSteps.Exists(step => step != null))//依次执行每个水位阶段
         {
-            Debug.LogWarning($"{name}:预设水位序列为空。", this);
+            Debug.LogWarning($"{name}:没有有效的preset steps。", this);
             FinishCycleWithoutReset();
                 yield break;//没有配置任何阶段就发出警告
         }
 
         while (isRunning)//只要还在运行，就反复播放下面这些
         {
-           //防止index越界
-           if(currentPresetIndex >= presetSteps.Count)
+            while (isPaused)
+                yield return null;
+
+            if(presetSteps.Count == 0)
             {
-                currentPresetIndex = 0;
+                FinishCycleWithoutReset();
+                yield break;
             }
 
+            currentPresetIndex = Mathf.Clamp(
+                currentPresetIndex, 0, presetSteps.Count - 1);
+           //防止index越界
+           
             WaterLevelStep step = presetSteps[currentPresetIndex];
 
             //如果现在这个阶段是空的
             if(step == null)
             {
-                currentPresetIndex++;
+                currentPresetIndex = (currentPresetIndex + 1) % presetSteps.Count;
+
+                yield return null;
+                //currentPresetIndex++;
                 continue;
             }
 
-            float targetHeight = Mathf.Clamp(step.absoluteHeight, 0f, maximumHeight);
+            presetStepChangedExternally = false;
 
-            //如果是在涨水
-            if(targetHeight > CurrentHeight + HeightEpsilon)
+            float target = Mathf.Clamp(
+                step.absoluteHeight,
+                0f,
+                maximumHeight);
+
+            if (target > CurrentHeight + HeightEpsilon)
             {
                 onFloodPulse?.Invoke();
             }
 
-            SetWaterHeight(targetHeight, sendWaterToLowerRooms:true);
+            // 先平滑到达这个阶段的目标高度。
+            BeginTransition(
+                target,
+                step.transitionSeconds,
+                true,
+                smoothPresetTransitions);
 
-            //===
-            //本阶段停留
-            //====
-            presetStepChangedExternally = false;
+            int revision = tweenRevision;
 
-            float elapsed = 0f;
-            while (elapsed < step.holdSeconds)
+            // 等待补间结束，或被外部操作打断。
+            while (tweenActive &&
+                   revision == tweenRevision &&
+                   !presetStepChangedExternally)
             {
-                //如果玩家被按机关回退了阶段
-                //马上结束当前阶段的等待
-                if (presetStepChangedExternally)
-                {
-                    break;
-                }
+                yield return null;
+            }
 
+            // 到达后再计算停留时间。
+            float held = 0f;
+
+            while (!presetStepChangedExternally &&
+                   held < Mathf.Max(0f, step.holdSeconds))
+            {
                 if (!isPaused)
                 {
-                    elapsed += Time.deltaTime;
+                    held += Time.deltaTime;
                 }
-                yield return null;
 
+                yield return null;
             }
 
             if (TryFinishAndReset())
-            {
                 yield break;
 
-            }
-
-            //如果刚才是外部机关导致的阶段转变
-            if (presetStepChangedExternally)
+            // 开关回退过阶段时，使用开关指定的阶段。
+            if (!presetStepChangedExternally)
             {
-                presetStepChangedExternally = false;
-
-                ////不要currentPresetIndex++
-                //直接从新阶段开始
-                continue;
-
+                currentPresetIndex =
+                    (currentPresetIndex + 1) % presetSteps.Count;
             }
 
-
-            //===
-            //正常进入下一阶段
-            //===
-
-            currentPresetIndex++;
-
-            //最后一阶段结束后
-            //回到第一阶段
-            if(currentPresetIndex >= presetSteps.Count)
-            {
-                currentPresetIndex = 0;
-            }
+            // 即使所有时间都设为 0，也避免同一帧无限循环。
+            yield return null;
         }
-    }
+        //    float targetHeight = Mathf.Clamp(step.absoluteHeight, 0f, maximumHeight);
 
-    private IEnumerator RunAccumulatingCycle()//每隔一段时间张一档
+        //    //如果是在涨水
+        //    if(targetHeight > CurrentHeight + HeightEpsilon)
+        //    {
+        //        onFloodPulse?.Invoke();
+        //    }
+
+        //    SetWaterHeight(targetHeight, sendWaterToLowerRooms:true);
+
+        //    //===
+        //    //本阶段停留
+        //    //====
+        //    presetStepChangedExternally = false;
+
+        //    float elapsed = 0f;
+        //    while (elapsed < step.holdSeconds)
+        //    {
+        //        //如果玩家被按机关回退了阶段
+        //        //马上结束当前阶段的等待
+        //        if (presetStepChangedExternally)
+        //        {
+        //            break;
+        //        }
+
+        //        if (!isPaused)
+        //        {
+        //            elapsed += Time.deltaTime;
+        //        }
+        //        yield return null;
+
+        //    }
+
+        //    if (TryFinishAndReset())
+        //    {
+        //        yield break;
+
+        //    }
+
+        //    //如果刚才是外部机关导致的阶段转变
+        //    if (presetStepChangedExternally)
+        //    {
+        //        presetStepChangedExternally = false;
+
+        //        ////不要currentPresetIndex++
+        //        //直接从新阶段开始
+        //        continue;
+
+        //    }
+
+
+        //    //===
+        //    //正常进入下一阶段
+        //    //===
+
+        //    currentPresetIndex++;
+
+        //    //最后一阶段结束后
+        //    //回到第一阶段
+        //    if(currentPresetIndex >= presetSteps.Count)
+        //    {
+        //        currentPresetIndex = 0;
+        //    }
+        //}
+    }
+    private IEnumerator RunAccumulatingCycle()
     {
-        while (isRunning)//要是真的就一直循环
+        // 第一次涨水前的等待。
+        yield return WaitPausable(accumulationInterval);
+
+        while (isRunning)
         {
-            yield return WaitPausable(accumulationInterval);//等一会
+            while (isPaused)
+                yield return null;
 
-            if (TryFinishAndReset())//检查这次之后要不要重置（打破循环）
+            // 收到“完成当前阶段后重置”：
+            // 不再增加新目标，等当前补间结束。
+            if (finishCurrentStepThenReset)
             {
-                yield break;
-            }
-            //到最高水位之后循环仍然进行，泄水演出仍可以继续播放
+                while (tweenActive)
+                    yield return null;
 
-            onFloodPulse?.Invoke();//有没有特效
-
-            SetWaterHeight(
-                CurrentHeight + heightPerPulse,//在当前水位上加heightPerPulse，每次涨水加一段
-                sendWaterToLowerRooms: false);
-            yield return WaitPausable(holdAfterPulse);//涨水后停一会
-
-            if(TryFinishAndReset())
-            {
-                yield break;
+                if (TryFinishAndReset())
+                    yield break;
             }
 
+            // 必须加在目标高度上，避免补间没完成时少算水量。
+            float previousTarget = TargetHeight;
+
+            float nextTarget = Mathf.Clamp(
+                previousTarget + heightPerPulse,
+                0f,
+                maximumHeight);
+
+            if (nextTarget > previousTarget + HeightEpsilon)
+            {
+                onFloodPulse?.Invoke();
+
+                BeginTransition(
+                    nextTarget,
+                    accumulationTransitionSeconds,
+                    false,
+                    false);
+            }
+
+            // 两次涨水开始之间的时间。
+            float interval = Mathf.Max(
+                0.01f,
+                accumulationInterval + holdAfterPulse);
+
+            float waited = 0f;
+
+            while (waited < interval)
+            {
+                if (finishCurrentStepThenReset)
+                    break;
+
+                if (!isPaused)
+                {
+                    waited += Time.deltaTime;
+                }
+
+                yield return null;
+            }
         }
     }
+    //private IEnumerator RunAccumulatingCycle()//每隔一段时间张一档
+    //{
+    //    yield return WaitPausable(accumulationInterval);
+
+    //    while (isRunning)//要是真的就一直循环
+    //    {
+    //        while (IsPaused)
+    //            yield return null;
+
+    //        yield return WaitPausable(accumulationInterval);//等一会
+
+    //        if (TryFinishAndReset())//检查这次之后要不要重置（打破循环）
+    //        {
+    //            yield break;
+    //        }
+    //        //到最高水位之后循环仍然进行，泄水演出仍可以继续播放
+
+    //        onFloodPulse?.Invoke();//有没有特效
+
+    //        SetWaterHeight(
+    //            CurrentHeight + heightPerPulse,//在当前水位上加heightPerPulse，每次涨水加一段
+    //            sendWaterToLowerRooms: false);
+    //        yield return WaitPausable(holdAfterPulse);//涨水后停一会
+
+    //        if(TryFinishAndReset())
+    //        {
+    //            yield break;
+    //        }
+
+    //    }
+    //}
 
     private IEnumerator WaitPausable(float duration)//可以暂停的计时器
     {
         float elapsed = 0f;//记录等了几秒
 
-        while (elapsed < duration)//要是等待还没达到目标时间就一直循环
+        while (isPaused || elapsed <duration)//要是等待还没达到目标时间就一直循环
         {
             if (!isPaused)//暂停了就不累计，不暂停就↓
             {
@@ -643,6 +830,8 @@ public void StepBackOneStage()
 
     private bool TryFinishAndReset()//检查要不要结束然后重置
     {
+
+
         if (!finishCurrentStepThenReset)//没收到消息就什么都不做
         {
             return false;
@@ -654,6 +843,7 @@ public void StepBackOneStage()
         isPaused = false;
         finishCurrentStepThenReset = false;
 
+        EndTransition(false);
         SetWaterHeight(initialHeight, sendWaterToLowerRooms: false);//水位复原
 
         onCycleStopped?.Invoke();//触发特效们
@@ -665,6 +855,7 @@ public void StepBackOneStage()
 
     private void FinishCycleWithoutReset()//结束但不恢复水位
     {
+        EndTransition(true);
         //清理所有循环状态然后
         cycleRoutine = null;
         isRunning = false;
@@ -687,11 +878,13 @@ public void StepBackOneStage()
         }
 
         SetWaterHeight(CurrentHeight - amount ,sendWaterToLowerRooms);//计算目标水位
+      
     }
 
     private void SetWaterHeight(       float requestedHeight,       bool sendWaterToLowerRooms)
         //真的开始修改水位
     {
+        EndTransition(true);
         float previousHeight = CurrentHeight;//先记录修改之前的，用来之后判断涨跌
 
         CurrentHeight = Mathf.Clamp(requestedHeight,  0f, maximumHeight);//把目标水位限制在0-max
@@ -774,19 +967,45 @@ public void StepBackOneStage()
             targetRoom.ReceiveTransferredWater(targetRise);
         }
     }
-
-    private void ReceiveTransferredWater(float amount)//下层接水
+    private void ReceiveTransferredWater(float amount)
     {
-        if(amount <= 0f)//没有进水就不执行
-        {
+        if (amount <= 0f)
             return;
-        }
 
-        onFloodPulse?.Invoke();//特效
+        // 上一笔来水还没涨完时，继续累加到已有目标。
+        // 如果下层正在退水，则从当前实际高度开始接收，
+        // 避免收到水后反而继续降低水位。
+        float baseHeight = Mathf.Max(CurrentHeight, TargetHeight);
 
-        //false:下层上涨不再次递归传递
-        SetWaterHeight(CurrentHeight + amount, sendWaterToLowerRooms: false);//下层只是上涨，没有排水，避免继续传播
+        float newTarget = Mathf.Clamp(
+            baseHeight + amount,
+            0f,
+            maximumHeight);
+
+        // 已经达到最大目标，不重复播放补间和入水特效。
+        if (newTarget <= baseHeight + HeightEpsilon)
+            return;
+
+        onFloodPulse?.Invoke();
+
+        BeginTransition(
+            newTarget,
+            receivedWaterTransitionSeconds,
+            false,
+            smoothReceivedWater);
     }
+    //private void ReceiveTransferredWater(float amount)//下层接水
+    //{
+    //    if(amount <= 0f)//没有进水就不执行
+    //    {
+    //        return;
+    //    }
+
+    //    onFloodPulse?.Invoke();//特效
+
+    //    //false:下层上涨不再次递归传递
+    //    SetWaterHeight(CurrentHeight + amount, sendWaterToLowerRooms: false);//下层只是上涨，没有排水，避免继续传播
+    //}
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
@@ -795,8 +1014,136 @@ public void StepBackOneStage()
     }
 
     // Update is called once per frame
-    void Update()
+    private void Update()
     {
-        
+        if (!tweenActive || isPaused || Time.deltaTime <= 0f)
+            return;
+
+        float deltaTime = Time.deltaTime;
+
+        // 时间仍然每帧累计，确保补间耗时准确。
+        tweenElapsed = Mathf.Min(
+            tweenElapsed + deltaTime,
+            tweenDuration);
+
+        bool finished = tweenElapsed >= tweenDuration;
+
+        if (useFixedWaterUpdateInterval)
+        {
+            waterUpdateClock += deltaTime;
+
+            float interval = Mathf.Max(0.01f, waterUpdateInterval);
+
+            // 没到刷新时间就返回。
+            // 但到达补间终点时必须立即应用最终水位。
+            if (!finished && waterUpdateClock < interval)
+                return;
+
+            // 保留不足一个间隔的余量，减少计时偏差。
+            // 卡顿后也只刷新一次，不集中补算多次。
+            waterUpdateClock %= interval;
+        }
+        else
+        {
+            waterUpdateClock = 0f;
+        }
+
+        int revision = tweenRevision;
+
+        float t = tweenDuration > 0f
+            ? Mathf.Clamp01(tweenElapsed / tweenDuration)
+            : 1f;
+
+        float progress = tweenSmooth
+            ? Mathf.Clamp01(waterTransitionCurve.Evaluate(t))
+            : t;
+
+        // 结束时精确落到目标高度。
+        float height = finished
+            ? tweenTarget
+            : Mathf.Lerp(tweenStart, tweenTarget, progress);
+
+        ApplyActualHeight(height);
+
+        // 事件回调可能开启新补间，不能误结束它。
+        if (revision == tweenRevision && finished)
+        {
+            EndTransition(true);
+        }
     }
+
+    private void BeginTransition(
+        float height ,
+        float seconds,
+        bool transfer,
+        bool smooth)
+    {
+        //普通中断，先结算之前实际下降的水量
+        EndTransition(true);
+
+        height = Mathf.Clamp(height, 0f, maximumHeight);
+
+        if(seconds <= 0f || Mathf.Abs(height - CurrentHeight) <= HeightEpsilon)
+        {
+            SetWaterHeight(height, transfer);
+            return;
+        }
+
+
+        tweenStart = CurrentHeight;
+        tweenTarget = height;
+        tweenDuration = seconds;
+        tweenElapsed = 0f;
+        waterUpdateClock = 0f;
+        tweenSmooth = smooth;
+        tweenTransfersWater = transfer;
+        tweenActive = true;
+
+        //一段变化只触发一次涨落事件
+        if(height > CurrentHeight)
+        {
+            onWaterRaised?.Invoke();
+
+        }
+        else
+        {
+            onWaterLowered?.Invoke();
+        }
+
+    }
+
+    //结束或者取消补间
+    //settleTransfer：是否结算已经实际下降的水量
+
+    private void EndTransition(bool settleTransfer)
+    {
+        float actualDrop =
+            tweenActive && tweenTransfersWater && settleTransfer
+            ? Mathf.Max(0f, tweenStart - CurrentHeight)
+            : 0f;
+
+        tweenActive = false;
+        tweenRevision++;
+
+        if (actualDrop > HeightEpsilon)
+        {
+            SendDroppedWaterToLowerRooms(actualDrop);
+        }
+    }
+
+        //每帧只更新实际水位，不反复触发涨落和传水
+        private void ApplyActualHeight(float height,bool force = false)
+    {
+        height = Mathf.Clamp(height, 0f, maximumHeight);
+
+        if (!force && height == CurrentHeight)
+            return;
+
+        CurrentHeight = height;
+
+        ApplyWaterBodyTransform(height);
+
+        onWaterHeightChanged?.Invoke(height);
+    }
+    
 }
