@@ -91,6 +91,12 @@ public class WaterPunchWaterSafety : MonoBehaviour, StarterAssets.IWaterMovement
     /// </summary>
     public int RemainingStruggleUses => remainingStruggleUses;
 
+    public int MaxSwimUses => Mathf.Max(0, swimUses);
+    public int MaxStruggleUses => Mathf.Max(0, struggleUses);
+
+    //次数或入水状态变化时，通知外部显示刷新
+    public event System.Action SwimmingStateChanged;
+
     /// <summary>
     /// Gets whether this player is currently inside a water hazard.
     /// </summary>
@@ -178,6 +184,8 @@ public class WaterPunchWaterSafety : MonoBehaviour, StarterAssets.IWaterMovement
     {
         EnsureDrowningDetectionPoint();
         CreateSwimmingFeedback();
+
+        ResetSwimUses();
     }
 
     private void Update()
@@ -236,6 +244,11 @@ public class WaterPunchWaterSafety : MonoBehaviour, StarterAssets.IWaterMovement
         {
             ResetSwimUses();
         }
+        else
+        {
+            //离开水体，通知ui更新状态
+            SwimmingStateChanged?.Invoke();
+        }
     }
 
     /// <summary>
@@ -257,6 +270,8 @@ public class WaterPunchWaterSafety : MonoBehaviour, StarterAssets.IWaterMovement
     {
         remainingSwimUses = Mathf.Max(0, swimUses);
         remainingStruggleUses = Mathf.Max(0, struggleUses);
+
+        SwimmingStateChanged?.Invoke();
     }
 
     /// <summary>
@@ -288,6 +303,9 @@ public class WaterPunchWaterSafety : MonoBehaviour, StarterAssets.IWaterMovement
 
         // 暂存一次向上速度；角色控制器取走它后，负责后续每一帧的运动。
         pendingSwimUpwardVelocity = Mathf.Max(pendingSwimUpwardVelocity, upwardVelocity);
+
+        SwimmingStateChanged?.Invoke();
+
         PlaySwimmingFeedback(upwardVelocity > struggleUpwardVelocity);
         return true;
     }
