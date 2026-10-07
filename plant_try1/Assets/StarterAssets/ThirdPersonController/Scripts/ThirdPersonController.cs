@@ -21,6 +21,9 @@ namespace StarterAssets
         [Tooltip("Sprint speed of the character in m/s")]
         public float SprintSpeed = 5.335f;
 
+        [Tooltip("Keyboard fallback for sprint while the gameplay Sprint action is enabled. Supports both Shift keys.")]
+        public bool KeyboardSprintFallback = true;
+
         [Tooltip("How fast the character turns to face movement direction")]
         [Range(0.0f, 0.3f)]
         public float RotationSmoothTime = 0.12f;
@@ -220,7 +223,7 @@ namespace StarterAssets
         private void Move()
         {
             // set target speed based on move speed, sprint speed and if sprint is pressed
-            float targetSpeed = _input.sprint ? SprintSpeed : MoveSpeed;
+            float targetSpeed = SprintRequested() ? SprintSpeed : MoveSpeed;
 
             // a simplistic acceleration and deceleration designed to be easy to remove, replace, or iterate upon
 
@@ -288,6 +291,30 @@ namespace StarterAssets
                 _animator.SetFloat(_animIDSpeed, _animationBlend);
                 _animator.SetFloat(_animIDMotionSpeed, inputMagnitude);
             }
+        }
+
+        private bool SprintRequested()
+        {
+#if ENABLE_INPUT_SYSTEM
+            if (_playerInput != null)
+            {
+                if (!_playerInput.inputIsActive) return false;
+                InputAction sprintAction = _playerInput.currentActionMap?.FindAction("Sprint", false);
+                if (sprintAction != null)
+                {
+                    if (!sprintAction.enabled) return false;
+                    if (sprintAction.IsPressed()) return true;
+
+                    string scheme = _playerInput.currentControlScheme;
+                    bool keyboardScheme = string.IsNullOrEmpty(scheme) || scheme.Contains("Keyboard");
+                    if (KeyboardSprintFallback && keyboardScheme && Keyboard.current != null &&
+                        (Keyboard.current.leftShiftKey.isPressed || Keyboard.current.rightShiftKey.isPressed))
+                        return true;
+                }
+            }
+#endif
+            // Keep support for virtual/mobile sprint buttons and the legacy input path.
+            return _input.sprint;
         }
 
         private void JumpAndGravity()

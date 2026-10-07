@@ -77,6 +77,13 @@ public class FloatEvent: UnityEvent<float>  //广播一个floatEvent
 
 public class WaterRoomController : MonoBehaviour
 {
+    [Header("Swimming Rules")]
+    [Tooltip("Enabled: normal swimming. Disabled: chest-deep water immediately starts lethal drowning.")]
+    [SerializeField] private bool allowSwimming = true;
+
+    public bool AllowSwimming => allowSwimming;
+    public bool HasRespawnPoint => respawnPoint != null;
+
     //现在开始定义那些变量
     [Header("水体对象")]
     [SerializeField] private Transform waterBody;

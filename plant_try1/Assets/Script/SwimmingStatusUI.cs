@@ -56,7 +56,8 @@ public class SwimmingStatusUI : MonoBehaviour
             return;
         }
 
-        bool shouldShow = !showOnlyInWater || subscribedSource.IsInWater;
+        bool shouldShow = subscribedSource.SwimmingAllowed && !subscribedSource.IsDrowning &&
+            (!showOnlyInWater || subscribedSource.IsInWater);
         panelRoot.SetActive(shouldShow);
 
         if (!shouldShow)

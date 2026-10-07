@@ -32,6 +32,11 @@ public class WaterPunchWaterSafety : MonoBehaviour, StarterAssets.IWaterMovement
     [Min(0.1f)]
     [SerializeField] private float drowningDetectionPointHeight = 1f;
 
+    [Header("Lethal Water Chest Detection")]
+    [Tooltip("仅用于禁止游泳的房间。从角色胶囊底部到顶部的比例；0.75 约为站立胸口，不随游泳或弯腰动画下降。")]
+    [Range(0.5f, 0.95f)]
+    [SerializeField] private float lethalChestHeightRatio = 0.75f;
+
     [SerializeField] private Transform headDrowningDetectionPoint;
 
     [Min(0.1f)]
@@ -71,6 +76,9 @@ public class WaterPunchWaterSafety : MonoBehaviour, StarterAssets.IWaterMovement
     private bool isInWater;
     private bool isChestSubmerged;
     private bool hasGroundSupport;
+    private bool swimmingAllowed = true;
+    private bool isDrowning;
+    private CharacterController bodyController;
     private ParticleSystem swimSplash;
     private ParticleSystem swimMist;
     private LineRenderer rippleRenderer;
@@ -113,7 +121,29 @@ public class WaterPunchWaterSafety : MonoBehaviour, StarterAssets.IWaterMovement
     public bool CanStand => hasGroundSupport &&
         (!isInWater || (hasWaterSurface && StandingHeadPosition.y > waterSurfaceY + surfaceClearance));
 
-    public bool IsSwimming => isInWater && isChestSubmerged && !CanStand;
+    public bool SwimmingAllowed => swimmingAllowed;
+    public bool IsDrowning => isDrowning;
+    public bool IsSwimming => swimmingAllowed && !isDrowning && isInWater && isChestSubmerged && !CanStand;
+
+    public void SetSwimmingAllowed(bool allowed)
+    {
+        if (swimmingAllowed == allowed) return;
+        swimmingAllowed = allowed;
+        if (!allowed) pendingSwimUpwardVelocity = 0f;
+        SwimmingStateChanged?.Invoke();
+    }
+
+    public void SetDrowning(bool value)
+    {
+        if (isDrowning == value) return;
+        isDrowning = value;
+        if (value)
+        {
+            pendingSwimUpwardVelocity = 0f;
+            keepStandingUntil = 0f;
+        }
+        SwimmingStateChanged?.Invoke();
+    }
 
     public void SetGroundSupport(bool supported)
     {
@@ -139,6 +169,25 @@ public class WaterPunchWaterSafety : MonoBehaviour, StarterAssets.IWaterMovement
     public float MaximumSinkSpeed => Mathf.Max(0.1f, maximumSinkSpeed);
 
     public Transform DrowningDetectionPoint => drowningDetectionPoint;
+
+    public Vector3 GetLethalChestDetectionPosition()
+    {
+        if (bodyController == null) bodyController = GetComponent<CharacterController>();
+        if (bodyController == null)
+            return transform.TransformPoint(Vector3.up * 1.35f);
+
+        Vector3 localPoint = bodyController.center + Vector3.up *
+            (bodyController.height * (Mathf.Clamp(lethalChestHeightRatio, 0.5f, 0.95f) - 0.5f));
+        return transform.TransformPoint(localPoint);
+    }
+
+    private void OnDrawGizmosSelected()
+    {
+        Vector3 chest = GetLethalChestDetectionPosition();
+        Gizmos.color = new Color(1f, 0.35f, 0.15f);
+        Gizmos.DrawWireSphere(chest, 0.06f);
+        Gizmos.DrawLine(chest - transform.right * 0.3f, chest + transform.right * 0.3f);
+    }
 
     /// <summary>
     /// Gets the head point used to decide whether the player is drowning.
@@ -216,7 +265,7 @@ public class WaterPunchWaterSafety : MonoBehaviour, StarterAssets.IWaterMovement
         }
         //only in water and can stand, start shallow water protection
 
-        if (isInWater && CanStand)
+        if (!isDrowning && isInWater && CanStand)
         {
             keepStandingUntil = Time.time + shallowWaterJumpGraceSeconds;
         }
