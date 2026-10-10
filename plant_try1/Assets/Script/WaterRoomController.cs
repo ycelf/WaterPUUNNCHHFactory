@@ -364,6 +364,36 @@ public class WaterRoomController : MonoBehaviour
         LowerWaterBy(amount, true);
     }
 
+    // Stop automatic cycling and drain a fixed amount without changing preset entries.
+    // Pending downward targets accumulate, so closely spaced devices each remove their full amount.
+    public bool LowerWaterManually(float amount, float transitionSeconds, bool smooth)
+    {
+        if (!isActiveAndEnabled || waterBody == null || amount <= 0f ||
+            float.IsNaN(amount) || float.IsInfinity(amount))
+            return false;
+
+        float baseHeight = Mathf.Min(CurrentHeight, TargetHeight);
+        float target = Mathf.Clamp(baseHeight - amount, 0f, maximumHeight);
+        if (baseHeight - target <= HeightEpsilon)
+            return false;
+
+        bool wasRunning = isRunning || cycleRoutine != null;
+        if (cycleRoutine != null)
+            StopCoroutine(cycleRoutine);
+        cycleRoutine = null;
+        isRunning = false;
+        isPaused = false; // A paused automatic cycle must not freeze this manual transition.
+        finishCurrentStepThenReset = false;
+        presetStepChangedExternally = false;
+
+        if (wasRunning)
+            onCycleStopped?.Invoke();
+
+        // Keep existing transfer accounting, easing curve and fixed update interval.
+        BeginTransition(target, Mathf.Max(0f, transitionSeconds), true, smooth);
+        return true;
+    }
+
     public void LowerWaterWithoutTransfer(float amount)
     {
         LowerWaterBy(amount, false);

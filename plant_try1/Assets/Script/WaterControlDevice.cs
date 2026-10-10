@@ -4,10 +4,11 @@ using UnityEngine.InputSystem;
 
 public enum WaterDeviceMode
 {
-    Freeze,
-    Delay,
-    StepBack,
-    Solve
+    Freeze = 0,
+    Delay = 1,
+    StepBack = 2,
+    Solve = 3,
+    LowerByAmount = 4
 }
 public class WaterControlDevice : MonoBehaviour
 {
@@ -26,6 +27,14 @@ public class WaterControlDevice : MonoBehaviour
     [Header("Delay模式")]
     [SerializeField]
     private float delaySeconds = 5f;
+
+    [Header("Lower By Amount")]
+    [Tooltip("Water height removed per interaction, independent of preset stages.")]
+    [Min(0.01f)] [SerializeField] private float lowerAmount = 1f;
+    [Tooltip("Seconds per lowering operation. Zero applies instantly.")]
+    [Min(0f)] [SerializeField] private float lowerTransitionSeconds = 1.5f;
+    [Tooltip("Use the room's Water Transition Curve; disabled means constant speed.")]
+    [SerializeField] private bool smoothLowering = true;
 
     [Header("机关设置")]
     [SerializeField]
@@ -87,6 +96,12 @@ public class WaterControlDevice : MonoBehaviour
 
                 StepBackWater();
 
+                break;
+
+            case WaterDeviceMode.LowerByAmount:
+                if (!roomController.LowerWaterManually(
+                        lowerAmount, lowerTransitionSeconds, smoothLowering))
+                    return; // Do not consume a one-shot device when the water is already empty.
                 break;
 
             case WaterDeviceMode.Solve:
